@@ -97,6 +97,11 @@ def enroll():
         fail("keys must be ssh-ed25519")
     node_path = os.path.join(NODES, name + ".json")
     node = read_json(node_path, {})
+    host_line = "%s %s" % (host.group(1), host.group(2))
+    if node.get("host_key") and node["host_key"] != host_line:
+        # a registered computer is only replaced by ITSELF (same sshd host key): a copied setup file cannot take its place
+        fail("a computer named '%s' is already registered (with another host key). If this is a reinstall, the "
+             "administrator first runs:  pc remove %s" % (name, name))
     port = node.get("port")
     if not port:
         used = {read_json(os.path.join(NODES, f), {}).get("port") for f in os.listdir(NODES) if f.endswith(".json")} \
@@ -120,7 +125,7 @@ def enroll():
         known = []
     known.append("%s %s %s" % (hk, host.group(1), host.group(2)))     # the computer's own host key: pinned, never "accept-new"
     write_atomic(KNOWN, "\n".join(known) + "\n")
-    node.update({"name": name, "port": port, "user": user, "computer": str(d.get("computer") or "")[:60],
+    node.update({"name": name, "port": port, "user": user, "host_key": host_line, "computer": str(d.get("computer") or "")[:60],
                  "windows": str(d.get("windows") or "")[:120], "enrolled_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "invite": sys.argv[1]})
     write_atomic(node_path, json.dumps(node, indent=1, ensure_ascii=False))
