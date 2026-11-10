@@ -31,7 +31,94 @@ $BlockEnd = '# <<< PC Remote'
 $KeyMark = 'pc-remote-admin'
 $Utf8 = New-Object Text.UTF8Encoding $false
 
+# The guide/interface (a Persian HTML page; the console garbles Persian, a page does not).
+$GuideTemplate = @'
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>راهنمای PC Remote</title>
+<style>
+:root{color-scheme:dark light}
+body{margin:0;background:#0f1115;color:#e7e9ee;font-family:Tahoma,"Segoe UI",sans-serif;line-height:2;padding:26px}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:21px;margin:0 0 4px}
+.sub{color:#9aa0a6;font-size:13px;margin-bottom:18px}
+.badge{display:inline-block;padding:6px 16px;border-radius:999px;font-weight:bold;font-size:14px}
+.ok{background:#15351f;color:#56d98a}.local{background:#13314c;color:#67a8f5}.err{background:#3a1717;color:#f98a8a}
+.card{background:#171a21;border:1px solid #262b35;border-radius:14px;padding:14px 18px;margin:13px 0}
+.k{color:#9aa0a6;font-size:13px;margin-bottom:3px}
+.v{font-size:19px;font-weight:bold;direction:ltr;text-align:right;unicode-bidi:plaintext}
+code{background:#0b0d11;border:1px solid #262b35;border-radius:6px;padding:2px 7px;direction:ltr;unicode-bidi:plaintext}
+ol{margin:4px 0 0;padding-inline-start:20px}
+.errbox{margin-top:10px;background:#2a1414;border:1px solid #5a2626;border-radius:10px;padding:10px 12px;direction:ltr;text-align:left;font-size:12px;white-space:pre-wrap;color:#f2b8b8}
+.foot{color:#7b818a;font-size:12px;margin-top:20px}
+</style></head><body><div class="wrap">
+<h1>راهنمای دسترسی از راه دور — PC Remote</h1>
+<div class="sub">این کامپیوتر از راهِ یک تونلِ رمزشده به سرور وصل می‌شود تا مدیر مثلِ یک سرور (VPS) به آن دسترسی داشته باشد.</div>
+<div><span class="badge @@BC@@">@@BADGE@@</span> &nbsp; @@BADGEDESC@@</div>
+<div class="card"><div class="k">نامِ این کامپیوتر روی سرور (شناسه برای اتصال)</div><div class="v">@@NAME@@</div></div>
+<div class="card"><div class="k">مدیر چطور وصل می‌شود</div>
+<div>روی سرور، با دستورِ <code>pc @@NAME@@</code> یک محیطِ کاملِ مدیریتی (PowerShell با دسترسیِ Administrator) روی همین کامپیوتر باز می‌شود؛ و با <code>pc @@NAME@@ put</code> / <code>get</code> فایل رد و بدل می‌شود. از طرفِ شما کاری لازم نیست.</div></div>
+<div class="card"><div class="k">رمز و امنیت</div>
+<div>اتصال فقط با «کلیدِ رمزنگاری» است، نه رمزِ عبور — پس چیزی برای به‌خاطر سپردن نیست. هیچ دری به اینترنت یا شبکهٔ محلی باز نمی‌شود؛ فقط همین کامپیوتر به سرور وصل می‌شود. سرویسِ داخلیِ SSH: <b>@@SSHD@@</b> · تونل: <b>@@TASK@@</b>.</div></div>
+<div class="card"><div class="k">اگر وصل نشد (عیب‌یابی)</div>
+<ol><li>اینترنتِ این کامپیوتر روشن باشد.</li><li>یکی دو دقیقه صبر کنید؛ تونل خودش دوباره تلاش می‌کند.</li><li>اگر باز نشد، همین فایل (<code>PC-Remote-Setup.bat</code>) را دوباره اجرا کنید.</li><li>لاگِ اتصال: <code>@@LOG@@</code></li></ol>@@ERR@@</div>
+<div class="card"><div class="k">قطعِ کاملِ دسترسی</div>
+<div>فایلِ <code>PC-Remote-Setup.bat</code> را با گزینهٔ <code>remove</code> اجرا کنید (خطِ فرمان: <code>PC-Remote-Setup.bat remove</code>). همه‌چیز — تونل، کلید و سرویس — برداشته می‌شود.</div></div>
+<div class="foot">این صفحه هنگامِ اجرای فایل ساخته شد · @@WHEN@@ · یک نسخه هم روی دسکتاپِ عمومی هست.</div>
+</div></body></html>
+'@
+
 function Say($m) { Write-Host $m }
+
+function Esc($s) { return ([string]$s).Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;') }
+
+function Node-Info {
+    $p = Join-Path $Root 'node.json'
+    if (Test-Path -LiteralPath $p) { try { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) } catch {} }
+    return $null
+}
+
+function Local-Health {
+    $svc = Get-Service sshd -ErrorAction SilentlyContinue
+    $task = $null
+    try { $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
+    return @{ sshd = ($svc -and $svc.Status -eq 'Running'); tunnel = [bool]$task }
+}
+
+function Open-Guide($status, $name, $errMsg) {
+    if (-not $name) { $ni = Node-Info; if ($ni) { $name = $ni.name } }
+    if (-not $name) { $name = '(not registered yet)' }
+    $h = Local-Health
+    switch ($status) {
+        'ok'    { $bc = 'ok';    $bt = 'وصل است';      $bd = 'سرور به این کامپیوتر می‌رسد. کارِ دیگری لازم نیست.' }
+        'local' { $bc = 'local'; $bt = 'آمادهٔ اتصال';  $bd = 'تنظیماتِ این کامپیوتر انجام شده؛ وصل‌بودنِ نهایی را سرور می‌داند.' }
+        default { $bc = 'err';   $bt = 'هنوز وصل نشده'; $bd = 'تونل هنوز بالا نیامده؛ بخشِ عیب‌یابی را ببینید.' }
+    }
+    $err = ''
+    if ($errMsg) { $err = '<div class="errbox">' + (Esc $errMsg) + '</div>' }
+    $html = $GuideTemplate.
+        Replace('@@BC@@', $bc).Replace('@@BADGE@@', $bt).Replace('@@BADGEDESC@@', $bd).
+        Replace('@@NAME@@', (Esc $name)).
+        Replace('@@SSHD@@', $(if ($h.sshd) { 'روشن' } else { 'خاموش' })).
+        Replace('@@TASK@@', $(if ($h.tunnel) { 'فعال' } else { 'نیست' })).
+        Replace('@@LOG@@', (Esc (Join-Path $Root 'tunnel.log'))).
+        Replace('@@ERR@@', $err).
+        Replace('@@WHEN@@', (Get-Date).ToString('yyyy-MM-dd HH:mm'))
+    $guide = Join-Path $Root 'guide.html'
+    try { [IO.File]::WriteAllText($guide, $html, $Utf8) } catch { return }
+    try { Copy-Item -LiteralPath $guide -Destination (Join-Path $env:PUBLIC 'Desktop\PC Remote - Guide.html') -Force } catch {}
+    try { Start-Process $guide } catch {}
+}
+
+function Refresh-Guide {
+    $ni = Node-Info
+    if (-not $ni) { return (Setup) }
+    $h = Local-Health
+    $ok = $h.sshd -and $h.tunnel
+    Say ('PC Remote: showing the guide for "' + $ni.name + '" (run with  setup  to repair, or  remove  to undo)')
+    Open-Guide $(if ($ok) { 'local' } else { 'error' }) $ni.name `
+        $(if ($ok) { $null } else { 'The OpenSSH service or the tunnel task is not running on this computer. Run this file again (double-click) to repair it.' })
+    return 0
+}
 
 function Is-Admin {
     $p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -201,6 +288,8 @@ function Setup {
     $info = Ask-Server 'enroll' @{ computer = $env:COMPUTERNAME; user = $env:USERNAME; windows = [Environment]::OSVersion.VersionString;
                                    tunnel_pubkey = (Get-Content -LiteralPath ($tk + '.pub') -Raw).Trim(); host_key = $hostKey }
     if (-not $info.ok) { throw ('the server refused: ' + $info.message) }
+    [IO.File]::WriteAllText((Join-Path $Root 'node.json'),
+        (@{ name = $info.name; port = $info.port; user = $env:USERNAME; at = (Get-Date).ToString('s') } | ConvertTo-Json -Compress), $Utf8)
 
     Say '[5/6] the administrator key'
     $old = @()
@@ -234,12 +323,14 @@ function Setup {
             Say ''
             Say ('OK - the server reaches this computer as "' + $info.name + '".')
             Say 'Undo at any time:  PC-Remote-Setup.bat remove'
+            Open-Guide 'ok' $info.name $null
             return 0
         }
         if ($i -eq 3 -or $i -eq 8) { Say ('  still waiting: ' + $st.message) }
     }
     Say ('[!] The tunnel did not come up. Its log: ' + (Join-Path $Root 'tunnel.log'))
     if (Test-Path -LiteralPath (Join-Path $Root 'tunnel.log')) { Get-Content -LiteralPath (Join-Path $Root 'tunnel.log') -Tail 8 | ForEach-Object { Say ('    ' + $_) } }
+    Open-Guide 'error' $info.name ('The tunnel did not come up within a minute. Check this computer''s internet and run the file again. Log: ' + (Join-Path $Root 'tunnel.log'))
     return 2
 }
 
@@ -267,12 +358,17 @@ if (-not (Is-Admin)) {
     exit 3
 }
 $ErrorActionPreference = 'Stop'
+$arg = "$env:PCR_ARGS".Trim()
 try {
-    # only the last value: anything a cmdlet wrote to the pipeline inside the function must not become the exit code
-    if ("$env:PCR_ARGS".Trim() -eq 'remove') { $code = Remove-All | Select-Object -Last 1 } else { $code = Setup | Select-Object -Last 1 }
+    # only the last value: anything a cmdlet wrote to the pipeline inside a function must not become the exit code
+    if ($arg -eq 'remove') { $code = Remove-All | Select-Object -Last 1 }
+    elseif ($arg -eq 'setup') { $code = Setup | Select-Object -Last 1 }
+    elseif (Test-Path -LiteralPath (Join-Path $Root 'node.json')) { $code = Refresh-Guide | Select-Object -Last 1 }  # already set up: show the guide
+    else { $code = Setup | Select-Object -Last 1 }
 } catch {
     Say ''
     Say ('[!] ' + $_.Exception.Message)
+    try { Open-Guide 'error' $null $_.Exception.Message } catch {}
     $code = 1
 }
 exit $code
