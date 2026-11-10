@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""PC Remote - what a computer running PC-Remote-Setup.bat may ask this server (2026-11-10).
+
+It is the forced command of the user `pcenroll` (through sudo; see install.sh): the invitation key inside the setup file
+can do nothing else. Arguments: <invite id> <request>; the request is one of
+    enroll        stdin {"computer", "user", "tunnel_pubkey", "host_key", "windows"} -> stdout {"name", "port", ...}
+    check         stdin {"name"} -> can the administrator log in through that computer's tunnel? {"ok", "message"}
+    openssh-zip   the Windows OpenSSH server package (for computers whose Windows cannot add the feature itself)
+Nothing here touches NMarketing.
+"""
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+BASE = "/opt/pc-remote"
+NODES = os.path.join(BASE, "nodes")
+INVITES = os.path.join(BASE, "invites.json")
+ZIP = os.path.join(BASE, "windows", "OpenSSH-Win64-v9.8.3.0p2.zip")
+TUNNEL_USER = "pcremote"
+TUNNEL_KEYS = "/var/lib/pcremote/.ssh/authorized_keys"
+KNOWN = "/root/.ssh/pc_known_hosts"
+ADMIN = "/root/.ssh/pc_admin"
+PUBLIC_HOST = "87.107.160.17"
+PORT_BASE = 22300
+
+KEY_RE = re.compile(r"^(ssh-ed25519) ([A-Za-z0-9+/]{60,100}={0,2})(?: [^\r\n]{0,120})?$")
+USER_RE = re.compile(r"^[^\s\"'@/\\:;|&<>`$*?%]{1,40}$")
+
+
+def fail(msg, code=1):
+    print(json.dumps({"ok": False, "message": msg}))
+    sys.exit(code)
+
+
+def read_json(path, default):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def write_atomic(path, text, mode=0o600, owner=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.chmod(tmp, mode)
+    if owner:
+        import pwd
+
+        pw = pwd.getpwnam(owner)
+        os.chown(tmp, pw.pw_uid, pw.pw_gid)
+    os.replace(tmp, path)
+
+
+def slug(computer):
+    s = re.sub(r"[^a-z0-9-]+", "-", (computer or "").lower()).strip("-")[:40]
+    return s or "pc"
+
+
+def stdin_json():
+    raw = sys.stdin.buffer.read(16384).decode("utf-8", "replace").strip().lstrip("﻿")
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        fail("bad request (not JSON)")
+    if not isinstance(d, dict):
+        fail("bad request")
+    return d
+
+
+def banner(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=3) as s:
+            s.settimeout(3)
+            data = s.recv(80)
+    except OSError:
+        return ""
+    return data.decode("ascii", "replace").strip() if data.startswith(b"SSH-") else ""
+
+
+def enroll():
+    d = stdin_json()
+    name = slug(d.get("computer"))
+    user = str(d.get("user") or "").strip()
+    tunnel = KEY_RE.match(str(d.get("tunnel_pubkey") or "").strip())
+    host = KEY_RE.match(str(d.get("host_key") or "").strip())
+    if not USER_RE.match(user):
+        fail("bad Windows user name")
+    if not tunnel or not host:
+        fail("keys must be ssh-ed25519")
+    node_path = os.path.join(NODES, name + ".json")
+    node = read_json(node_path, {})
+    port = node.get("port")
+    if not port:
+        used = {read_json(os.path.join(NODES, f), {}).get("port") for f in os.listdir(NODES) if f.endswith(".json")} \
+            if os.path.isdir(NODES) else set()
+        port = PORT_BASE + 1
+        while port in used:
+            port += 1
+    marker = " pc:%s" % name
+    try:
+        with open(TUNNEL_KEYS, encoding="utf-8") as fh:
+            lines = [ln for ln in fh.read().splitlines() if ln.strip() and not ln.rstrip().endswith(marker)]
+    except OSError:
+        lines = []
+    lines.append('restrict,port-forwarding,permitlisten="127.0.0.1:%d" %s %s%s' % (port, tunnel.group(1), tunnel.group(2), marker))
+    write_atomic(TUNNEL_KEYS, "\n".join(lines) + "\n", owner=TUNNEL_USER)
+    hk = "[127.0.0.1]:%d" % port
+    try:
+        with open(KNOWN, encoding="utf-8") as fh:
+            known = [ln for ln in fh.read().splitlines() if ln.strip() and not ln.startswith(hk + " ")]
+    except OSError:
+        known = []
+    known.append("%s %s %s" % (hk, host.group(1), host.group(2)))     # the computer's own host key: pinned, never "accept-new"
+    write_atomic(KNOWN, "\n".join(known) + "\n")
+    node.update({"name": name, "port": port, "user": user, "computer": str(d.get("computer") or "")[:60],
+                 "windows": str(d.get("windows") or "")[:120], "enrolled_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "invite": sys.argv[1]})
+    write_atomic(node_path, json.dumps(node, indent=1, ensure_ascii=False))
+    with open(ADMIN + ".pub", encoding="utf-8") as fh:
+        admin = fh.read().split()
+    print(json.dumps({"ok": True, "name": name, "port": port, "host": PUBLIC_HOST, "tunnel_user": TUNNEL_USER,
+                      "admin_pubkey": "%s %s" % (admin[0], admin[1])}))
+
+
+def check():
+    d = stdin_json()
+    node = read_json(os.path.join(NODES, slug(d.get("name")) + ".json"), {})
+    if not node:
+        fail("this computer is not enrolled")
+    b = banner(node["port"])
+    if not b:
+        fail("the tunnel is not up yet")
+    p = subprocess.run(["ssh", "-p", str(node["port"]), "-i", ADMIN, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                        "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=" + KNOWN, "-l", node["user"],
+                        "127.0.0.1", "Write-Output pc-remote-ok"], capture_output=True, timeout=60)
+    out = (p.stdout + p.stderr).decode("utf-8", "replace")
+    if p.returncode == 0 and "pc-remote-ok" in out:
+        node["checked_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        write_atomic(os.path.join(NODES, node["name"] + ".json"), json.dumps(node, indent=1, ensure_ascii=False))
+        print(json.dumps({"ok": True, "message": b}))
+    else:
+        fail("login through the tunnel failed: " + out.strip()[-400:])
+
+
+def main():
+    if len(sys.argv) != 3:
+        fail("usage")
+    invite, request = sys.argv[1], sys.argv[2].strip()
+    inv = read_json(INVITES, {}).get(invite)
+    if not inv or float(inv.get("expires", 0)) < time.time():
+        fail("this setup file has expired - ask for a new one")
+    if request == "enroll":
+        enroll()
+    elif request == "check":
+        check()
+    elif request == "openssh-zip":
+        with open(ZIP, "rb") as fh:
+            sys.stdout.buffer.write(fh.read())
+    else:
+        fail("unknown request")
+
+
+if __name__ == "__main__":
+    main()
