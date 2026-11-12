@@ -106,8 +106,11 @@ function Write-GuideFile($status, $name, $errMsg) {
         Replace('@@ERR@@', $err).
         Replace('@@WHEN@@', (Get-Date).ToString('yyyy-MM-dd HH:mm'))
     $guide = Join-Path $Root 'guide.html'
-    try { [IO.File]::WriteAllText($guide, $html, $Utf8) } catch { return $null }
-    try { Copy-Item -LiteralPath $guide -Destination (Join-Path $env:PUBLIC 'Desktop\PC Remote - Guide.html') -Force } catch {}
+    try { [IO.File]::WriteAllText($guide, $html, $Utf8) } catch { $guide = $null }
+    # C:\ProgramData\PCRemote is locked to admins, so the user's browser can't open guide.html there (2026-11-11 «باز نمیشد»).
+    # The copy on the Public Desktop is readable by everyone — return THAT so Open-Guide shows a page the browser can open.
+    $public = Join-Path $env:PUBLIC 'Desktop\PC Remote - Guide.html'
+    try { [IO.File]::WriteAllText($public, $html, $Utf8); return $public } catch {}
     return $guide
 }
 
@@ -260,12 +263,16 @@ function Find-Tool($name) {
 }
 
 function Lock-Down($path) {
-    # only Administrators + SYSTEM (ssh refuses keys that others can read)
+    # Owner = Administrators, access = Administrators + SYSTEM only, no inheritance.
+    # The owner matters: the tunnel runs as SYSTEM and Windows-OpenSSH refuses a private key whose OWNER is a normal
+    # user (even an admin). Setting the owner to the Administrators group (S-1-5-32-544), which OpenSSH accepts, is the
+    # fix for «UNPROTECTED PRIVATE KEY FILE / are too open» (2026-11-11: the tunnel_key was owned by the setup user).
     if (Test-Path -LiteralPath $path -PathType Container) {
         $null = & icacls.exe $path /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F'
     } else {
         $null = & icacls.exe $path /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F'
     }
+    $null = & icacls.exe $path /setowner '*S-1-5-32-544'          # Administrators own it ⇒ ssh (as SYSTEM) accepts the key
 }
 
 function Run-Native($exe, $argLine, $stdinFile) {
@@ -457,7 +464,11 @@ function Setup {
     }
     Say ('[!] The tunnel did not come up. Its log: ' + (Join-Path $Root 'tunnel.log'))
     if (Test-Path -LiteralPath (Join-Path $Root 'tunnel.log')) { Get-Content -LiteralPath (Join-Path $Root 'tunnel.log') -Tail 8 | ForEach-Object { Say ('    ' + $_) } }
-    Open-Guide 'error' $info.name ('The tunnel did not come up within a minute. Check this computer''s internet and run the file again. Log: ' + (Join-Path $Root 'tunnel.log'))
+    # the setup itself worked; only the tunnel check timed out. Still give the owner the folder + the control panel (with a «connect now» button).
+    [void](Write-GuideFile 'error' $info.name ('The tunnel did not come up yet. Check this computer''s internet, then use «connect now» / run this file again. Log: ' + (Join-Path $Root 'tunnel.log')))
+    $dir = Build-Folder
+    Say ('The control panel and guide are in the "PC Remote" folder on the desktop:  ' + $dir)
+    Show-Panel | Out-Null
     return 2
 }
 
