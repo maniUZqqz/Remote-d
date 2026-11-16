@@ -99,7 +99,7 @@ pc invite 72        # ۷۲ ساعت اعتبار؛ بی عدد = ۷۲
 
 ### یادداشتِ جدا شدن از NMarketing
 
-تا ۱۴۰۵/۰۸/۲۶ یک نسخه از فایلِ راه‌اندازی همراهِ بستهٔ به‌روزرسانیِ NMarketing و مخزنِ عمومیِ آن هم می‌رفت. حالا از NMarketing جدا شده و فقط از همین مخزن + دستِ مدیر می‌آید؛ آن نسخه‌های قدیمی در تاریخچهٔ آن مخزن می‌مانند، پس کلیدِ دعوتِ آن‌ها را لو‌رفته بدانید و باطل کنید.
+تا ۱۴۰۵/۰۸/۲۶ یک نسخه از فایلِ راه‌اندازی همراهِ بستهٔ به‌روزرسانیِ NMarketing و مخزنِ عمومیِ آن هم می‌رفت. حالا از NMarketing جدا شده و فقط از همین مخزن + دستِ مدیر می‌آید؛ آن نسخه‌های قدیمی در تاریخچهٔ آن مخزن می‌مانند؛ به همین دلیل دعوتِ آن‌ها در همان روز (۱۴۰۵/۰۸/۲۶) باطل شد (`pc revoke`) و یک فایلِ تازه ساخته شد. کلیدِ دعوتِ باطل‌شده دیگر هیچ کاری نمی‌کند.
 
 </div>
 
@@ -184,4 +184,4 @@ End-to-end test of the server side with a stand-in computer: `bash selftest.sh`.
 
 ### Separated from NMarketing
 
-Until 2026-11-16 a copy of the setup file also shipped inside NMarketing's node update package and its public repository. It is now separate and comes only from this repository plus the administrator's hand. The old copies remain in that repository's history, so treat their invitation key as public and revoke it.
+Until 2026-11-16 a copy of the setup file also shipped inside NMarketing's node update package and its public repository. It is now separate and comes only from this repository plus the administrator's hand. The old copies remain in that repository's history; for that reason their invitation was revoked the same day (`pc revoke`) and a fresh setup file was made. The revoked invitation key no longer does anything.

@@ -6,9 +6,10 @@ OUT=$(pc invite 1 | head -1); echo "invite file: $OUT"
 IID=$(basename "$OUT" .bat | sed 's/PC-Remote-Setup-//')
 python3 - "$OUT" <<'EOF'
 import re, sys, base64
-s = open(sys.argv[1], "rb").read().decode("ascii")
+s = open(sys.argv[1], "rb").read().decode("utf-8")      # the guide in the file is Persian
 assert "\r\n" in s, "CRLF"
-assert "@@" not in s, "placeholder left"
+for ph in ("@@HOST@@", "@@KNOWN_HOSTS@@", "@@ENROLL_KEY_B64@@", "@@ZIP_SHA256@@", "@@EXPIRES@@"):   # install-time placeholders (the guide has run-time ones)
+    assert ph not in s, "placeholder left: " + ph
 open("/tmp/pct/enroll_key", "wb").write(base64.b64decode(re.search(r"\$EnrollKeyB64 = '([^']+)'", s).group(1)))
 open("/tmp/pct/known_hosts", "w").write(re.search(r"\$KnownHosts = '([^']+)'", s).group(1) + "\n")
 print("bat ok: CRLF, placeholders filled")
