@@ -1,5 +1,13 @@
+# live state and secrets: they stay on the server and never go to git
 nodes/
 invites/
 out/
 invites.json
 windows/*.zip
+# a filled-in setup file embeds a private invitation key; only the template (with placeholders) is tracked
+PC-Remote-Setup-*.bat
+*_key
+*_key.pub
+*.pem
+__pycache__/
+*.pyc

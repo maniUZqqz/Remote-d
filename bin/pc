@@ -3,6 +3,7 @@
 
     pc                          the computers and whether their tunnel is up
     pc invite [HOURS]           a new setup file (PC-Remote-Setup.bat, valid HOURS, default 72) for any number of computers
+    pc revoke ID                cancel an invitation at once (its key and its file in out/); registered computers keep working
     pc NAME                     an interactive PowerShell on that computer (Administrator)
     pc NAME run 'COMMAND'       one PowerShell command
     pc NAME put LOCAL REMOTE    copy a file to it     (REMOTE like C:/Users/QQz/Desktop/x.txt)
@@ -158,6 +159,19 @@ def cmd_invite(hours):
     print("valid until %s (any number of computers)" % time.strftime("%Y-%m-%d %H:%M", time.localtime(expires)))
 
 
+def cmd_revoke(iid):
+    """An invitation that leaked (or is simply no longer needed): expire it now; prune_invites() then deletes its key from
+    pcenroll's authorized_keys, its key files and its setup file. Computers already registered are not affected (they use
+    their own tunnel key)."""
+    inv = read_json(INVITES, {})
+    if iid not in inv:
+        sys.exit("unknown invitation '%s' - see: pc" % iid)
+    inv[iid]["expires"] = 0
+    write(INVITES, json.dumps(inv, indent=1))
+    prune_invites()
+    print("revoked invitation %s: its key and its setup file no longer work (registered computers are not affected)" % iid)
+
+
 def cmd_remove(name):
     n = node(name)
     marker = " pc:%s" % n["name"]
@@ -186,6 +200,8 @@ def main(argv):
         return cmd_invite(float(argv[1]) if len(argv) > 1 else 72)
     if argv[0] == "remove" and len(argv) == 2:
         return cmd_remove(argv[1])
+    if argv[0] == "revoke" and len(argv) == 2:
+        return cmd_revoke(argv[1])
     n = node(argv[0])
     if not up(n["port"]):
         sys.exit("the tunnel of %s is down (the computer is off, or its internet)" % n["name"])

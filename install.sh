@@ -5,6 +5,7 @@
 #   /root/.ssh/pc_admin : the key `pc` logs in to the computers with; their host keys are pinned in /root/.ssh/pc_known_hosts
 # Undo: rm /etc/ssh/sshd_config.d/61-pc-remote.conf /etc/sudoers.d/pc-remote /usr/local/bin/pc; systemctl reload ssh;
 #       userdel -r pcremote; userdel -r pcenroll
+# Needs: root, openssh-server, python3, sudo, curl. The repository must be at /opt/pc-remote.
 set -euo pipefail
 B=/opt/pc-remote
 
@@ -56,9 +57,32 @@ echo 'pcenroll ALL=(root) NOPASSWD: /opt/pc-remote/bin/pc-enroll' > /etc/sudoers
 chmod 440 /etc/sudoers.d/pc-remote.new
 visudo -cf /etc/sudoers.d/pc-remote.new >/dev/null && mv /etc/sudoers.d/pc-remote.new /etc/sudoers.d/pc-remote
 
+# the Windows OpenSSH package (for computers whose Windows cannot add the OpenSSH Server feature itself). It is not kept in
+# git (5 MB): fetched once from the project's own release and checked against the SHA-256 pinned in bin/pc.
+ZIP_NAME=OpenSSH-Win64-v9.8.3.0p2.zip
+ZIP_URL=https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.8.3.0p2-Preview/OpenSSH-Win64.zip
+ZIP_SHA=$(sed -n 's/^ZIP_SHA256 = "\([0-9a-f]\{64\}\)".*/\1/p' "$B/bin/pc")
+mkdir -p "$B/windows"
+if [ ! -f "$B/windows/$ZIP_NAME" ]; then
+  if [ -n "$ZIP_SHA" ] && curl -fsSL --retry 3 --max-time 300 -o "$B/windows/$ZIP_NAME.part" "$ZIP_URL" \
+       && echo "$ZIP_SHA  $B/windows/$ZIP_NAME.part" | sha256sum -c --status; then
+    mv "$B/windows/$ZIP_NAME.part" "$B/windows/$ZIP_NAME"; echo "OpenSSH package for Windows: downloaded and verified"
+  else
+    rm -f "$B/windows/$ZIP_NAME.part"
+    echo "WARNING: could not fetch the Windows OpenSSH package ($ZIP_URL); only computers whose Windows can add OpenSSH Server by itself will work" >&2
+  fi
+fi
+
+# the repository is public: a pre-commit hook keeps keys and invitation files out of it
+if [ -d "$B/.git" ]; then
+  mkdir -p "$B/.git/hooks"
+  printf '#!/bin/sh\nexec "$(git rev-parse --show-toplevel)/bin/check-public.sh"\n' > "$B/.git/hooks/pre-commit"
+  chmod 755 "$B/.git/hooks/pre-commit"
+fi
+
 chown -R root:root "$B"
 chmod 755 "$B" "$B/bin" "$B/windows"
-chmod 755 "$B/bin/pc" "$B/bin/pc-enroll"
+chmod 755 "$B/bin/pc" "$B/bin/pc-enroll" "$B/bin/check-public.sh"
 install -d -m 700 "$B/nodes" "$B/invites" "$B/out"
 ln -sf "$B/bin/pc" /usr/local/bin/pc
 echo "PC Remote ready: pc invite  (a setup file for the computers)"
